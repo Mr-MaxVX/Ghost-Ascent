@@ -502,7 +502,7 @@ namespace {
 }
 
 // ============================================================================
-// Drawing Game Ended text (black on white background) "YOU WON"
+// Drawing YOU WON text (black on white background) "YOU WON"
 // ============================================================================
 void DrawGameEndedText(float screenW, float screenH) {
     const char* text = "YOU WON";

@@ -254,7 +254,7 @@ void LevelGenerator::DrawPlatforms(float cameraY, float viewH, float timeSec) co
             glEnd();
 
             // Black middle circle
-            glColor4f(0.02f, 0.02f, 0.04f, 1.0f);
+            glColor4f(0.02f, 0.02f, 0.04f, 1.0f); // Black color
             float midR = dotR * 0.75f;
             glBegin(GL_TRIANGLE_FAN);
             glVertex2f(cx, cy);
@@ -265,7 +265,7 @@ void LevelGenerator::DrawPlatforms(float cameraY, float viewH, float timeSec) co
             glEnd();
 
             // White inner core (bright center)
-            glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+            glColor4f(1.0f, 1.0f, 1.0f, 1.0f); // White color
             float innerR = dotR * 0.45f;
             glBegin(GL_TRIANGLE_FAN);
             glVertex2f(cx, cy);
