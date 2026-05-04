@@ -1,235 +1,190 @@
-# Technical Report: Ghost Ascent
+# Ghost Ascent — Technical Notes
 
-## Executive Summary
-
-**Ghost Ascent** is a vertical ascension platformer built in C++17 using OpenGL 2.1 immediate mode rendering. The game features a custom physics engine, procedural level generation, dynamic difficulty scaling, and a philosophical win condition system centered around resource management (discipline vs greed).
-
---- 
-
-## Architecture Overview
-
-### Design Philosophy
-
-The codebase follows a **component-based architecture** with clear separation of concerns:
-- **Game Loop** (`GameMain.cpp`): State machine, timing, rendering orchestration
-- **Player Controller** (`GhostController`): Physics, input, rendering
-- **Level System** (`LevelGenerator`): Procedural generation, collision data
-- **Threat System** (`WallSystem`): Dynamic difficulty, collision detection
-- **Presentation Layer** (`GameUi`, `BrickRenderer`): Visual effects, UI
-
-### State Machine
-
-```
-Intro_Idle → Intro_ZoomIn → Intro_Text → Intro_ZoomOut → Playing
-                                                      ↓
-                                            Win_Sequence (cinematic)
-                                                      ↓
-                                              Game_Won_Void
-```
-
-**Key States:**
-- **Intro States**: Camera zooms from wide view to gameplay view with typewriter text
-- **Playing**: Standard gameplay with wall closing and platform climbing
-- **Win_Sequence**: Frozen camera, ghost levitation, white explosion overlay
-- **Game_Won_Void**: Final victory screen with falling black feathers
+This is a breakdown of how the game works under the hood. I built this as a learning project in OpenGL and C++, so some choices are intentionally simple rather than "production-grade."
 
 ---
 
-## Core Systems
+## What This Is
 
-### 1. Ghost Controller (`GhostController.cpp`)
+A vertical platformer where you play as a sheet ghost climbing an endless tower. Two walls close in from the sides, and you manage their speed by collecting dots — white ones slow the walls temporarily, black ones push them back permanently but spawn obstacles. Collect 20 white dots and you win via a short cinematic sequence.
 
-**Physics Implementation:**
+Built with: C++17, OpenGL 2.1, GLFW3, GLEW, CMake.
+
+---
+
+## How the Code is Organized
+
+I split things into separate files roughly by responsibility:
+
+- `GameMain.cpp` — the main loop, state machine, and all the rendering setup
+- `GhostController.cpp` — player movement, jump physics, drawing the ghost
+- `LevelGenerator.cpp` — makes platforms and places dots as you climb
+- `WallSystem.cpp` — moves the walls, handles difficulty, crushes the player
+- `BrickRenderer.cpp` — draws the brick pattern on platforms
+- `GameUi.cpp` — text, lighting effects, blood overlay, win screen
+
+Each `.cpp` has a matching `.hpp` with declarations so other files can include them.
+
+---
+
+## The State Machine
+
+The game moves through a few distinct states:
+
+```
+Intro_Idle → Intro_ZoomIn → Intro_Text → Intro_ZoomOut → Playing
+                                                              ↓
+                                                    Win_Sequence (cinematic)
+                                                              ↓
+                                                        Game_Won_Void
+```
+
+**Intro:** The camera zooms in on the ghost, text types out "DISCIPLINE IS SAVIOR / GREED IS DEATH", then zooms back to normal gameplay view.
+
+**Playing:** Standard platforming. Walls close in, you jump and collect dots.
+
+**Win_Sequence:** Time freezes. The ghost floats upward. A white circle expands from the ghost to fill the screen. After 2.2 seconds it transitions to the white void victory screen.
+
+The intro and win sequence were added late in development — the state machine made it easy to bolt them on without breaking the main loop.
+
+---
+
+## Physics
+
+I used semi-implicit Euler integration because it's dead simple and stable enough for this:
+
 ```cpp
-// Semi-implicit Euler integration
 velocity += acceleration * dt;
 position += velocity * dt;
 ```
 
-**Features:**
-- Double-jump with coyote time
-- Variable jump height (based on spacebar hold)
-- Eye tracking (follows vertical input or defaults to climb direction)
-- Procedural sheet physics (simulated fabric movement)
+Gravity pulls down, jump sets a negative vertical velocity, and that's basically it. There's a double-jump with a small coyote time window so you don't have to frame-perfect your inputs.
 
-**Collision Detection:**
-- AABB (Axis-Aligned Bounding Box) against platform rectangles
-- One-way platform support (can jump through from below)
-- Wall collision handled separately by WallSystem
+Collision is AABB vs rectangles for platforms. One-way platforms let you jump up through them from below. Wall crushing is a circle-AABB check against the blade tips on each wall.
 
-### 2. Wall System (`WallSystem.cpp`)
+---
 
-**Dynamic Difficulty Formula:**
+## The Walls (The Core Tension)
+
+This is where most of the design effort went. The walls constantly move inward. Their speed is:
+
 ```cpp
-heightStress = max(0, maxHeightReached - 120.0f) * 0.018f;
-speed = (baseSpeed + heightStress) * skipStress * bufferMultiplier;
+speed = (baseSpeed + heightStress) * skipStress * bufferMul;
 ```
 
-| Factor | Value | Effect |
-|--------|-------|--------|
-| `baseSpeed` | 42.0f | Base closing speed |
-| `heightStress` | Variable | +1.8% speed per 100px height above 120px |
-| `skipStress` | 1.0x - 10.0x | +35% per skipped white dot (compounds) |
-| `bufferMul` | 0.38x | Temporary slowdown on dot collection (2.4s) |
+- `baseSpeed` = 42 px/s. Starting point.
+- `heightStress` grows as you climb higher — past 120px height it starts adding pressure.
+- `skipStress` starts at 1x. Every time you skip a white dot (pass under it without collecting), it multiplies by 1.35x, capped at 10x. This adds up fast.
+- `bufferMul` drops to 0.38x for 2.4 seconds when you collect a white dot — that's your breathing room.
 
-**Critical Design:** Walls are **unstoppable** - they never stop moving inward until they meet at the center. This creates constant pressure and prevents "safe camping."
-
-**Collision:** Circle-AABB intersection test for ghost crushing.
-
-### 3. Level Generator (`LevelGenerator.cpp`)
-
-**Procedural Generation Algorithm:**
-```
-1. Divide screen into vertical bands (left, center-left, center, center-right, right)
-2. Place initial platform at ground level
-3. For each new platform:
-   - Random x-position within valid band (respecting wall positions)
-   - y-position = highest_platform + gap (80-160px)
-   - Width: 60-120px, Height: 15-25px
-4. Spawn white dot on ~70% of platforms
-5. Every 10 dots: spawn black-dot platform on edge
-```
-
-**Black-Dot Platform Spawning:**
-- Triggered when `blackDotSpawnCounter >= blackDotNextSpawnAt`
-- First spawn at 10 white dots
-- Subsequent spawns every 2-4 white dots
-- **Win Condition Check:** Prevents spawn if `dotsCollectedTotal >= 20`
-
-### 4. Rendering Pipeline (`GameUi.cpp`)
-
-**OpenGL 2.1 Immediate Mode:**
-All rendering uses `glBegin()/glEnd()` with vertex specification:
-- `GL_QUADS`: Solid shapes (bricks, walls, ghost body)
-- `GL_LINES`: Outlines, text rendering
-- `GL_TRIANGLE_FAN`: Radial gradients (lighting effects)
-
-**Visual Effects:**
-
-| Effect | Technique |
-|--------|-----------|
-| **Radial Light** | Triangle fan with alpha gradient from center to edge |
-| **Top Arc Fixture** | 150-segment arc with pulse animation, fades in at 10+ dots |
-| **White Explosion** | Expanding circle (2000px/s) centered on ghost during Win_Sequence |
-| **Blood Overlay** | Procedural rectangle generation OR textured quad with chroma key |
-| **Typewriter Text** | Character-limited string drawing with timer-based reveal |
-
-**Text Rendering:**
-Custom vector font using `GL_LINES`:
-- 5x7 grid per character
-- Clean outline style with variable stroke weight
-- Kerning and spacing support
-
-### 5. Win Sequence Implementation
-
-**Trigger:** `dotsCollectedTotal >= 20`
-
-**Sequence Timeline:**
-```
-t=0.0s    → Freeze gameplay (skip updates)
-t=0.0-2.2s → Ghost levitates at 45px/s
-           → Camera frozen at capture position
-           → Render normally (frozen state)
-t=0.8s+   → White circle expands from ghost position
-           → radius = (winTimer - 0.8) * 2000.0f
-t=2.2s    → Transition to Game_Won_Void
-           → White screen, falling feathers, "YOU WON"
-```
-
-**Technical Challenge:** The camera projection changes during Win_Sequence:
-- **Before:** Normal camera following ghost
-- **During:** Frozen camera (`winCamY` captured at trigger)
-- **After:** UI projection (0,0 to fbW,fbH)
-
-The white explosion must account for this projection change - it uses screen-center coordinates during Win_Sequence.
+The walls never stop. I intentionally removed any "minimum gap" logic because I wanted the player to feel constant pressure. They only pause briefly when you collect a white dot.
 
 ---
 
-## Build System
+## Dots and the Discipline/Greed Choice
 
-**CMake Configuration:**
-```cmake
-find_package(OpenGL REQUIRED)
-find_package(GLEW REQUIRED)
-find_package(glfw3 REQUIRED)
+**White dots** appear on most platforms (~70%). Collecting one:
+- Triggers the 2.4s wall slow (buffer)
+- Slightly reduces your skipStress (forgiveness mechanic)
+- Counts toward the 20 needed to win
 
-target_link_libraries(GhostAscent 
-    OpenGL::GL
-    GLEW::GLEW
-    glfw
-)
+**Black-dot platforms** spawn after every 10 white dots collected. They appear on the left or right edge of the screen and contain black dots. Collecting a black dot:
+- Pushes both walls back by 40% (opens up space)
+- Slows current wall speed by 45%
+- BUT spawns a permanent obstacle platform that blocks future paths
+
+The idea is white dots = discipline (patient, incremental, leads to win). Black dots = greed (instant relief, but you pay for it later with harder traversal). You can ignore black dots entirely and just focus on white ones, or you can grab them when panicking — your choice.
+
+---
+
+## Rendering
+
+I used OpenGL 2.1 immediate mode (`glBegin`/`glEnd`). Not modern, not fast, but perfectly fine for a 2D game with only a few thousand vertices per frame. No shaders needed.
+
+- `GL_QUADS` — solid shapes (ghost body, bricks, walls, platforms)
+- `GL_LINES` — outlines, text rendering, the ghost's face
+- `GL_TRIANGLE_FAN` — radial gradients for lighting effects
+
+### Custom Text
+
+I drew my own font rather than using a library. Each character is a 5x7 grid rendered with `GL_LINES`. It looks clean at any zoom level and has zero dependencies. The intro text uses a typewriter effect that reveals characters over time.
+
+### Lighting
+
+There's a radial light around the ghost (only appears after the first black dot spawns) and a pulsing arc at the top of the screen that fades in after 10 dots. Both use alpha gradients via `GL_TRIANGLE_FAN`.
+
+---
+
+## The Win Sequence
+
+When `dotsCollectedTotal >= 20`, the game enters `Win_Sequence`:
+
+1. Capture the camera Y position and freeze it
+2. Skip all gameplay updates (ghost doesn't fall, walls don't move)
+3. Ghost levitates upward at 45 px/s
+4. After 0.8 seconds, draw a white circle expanding from the ghost at 2000 px/s
+5. At 2.2 seconds, switch to `Game_Won_Void` — white screen, falling black feathers, "YOU WON" text
+
+The tricky part was the camera. During the intro I use zoom-based projection centered on the ghost. During gameplay I use a normal scrolling camera. During the win sequence I need the frozen camera. Originally I had `if (currentState != Playing)` to handle the intro zoom, which accidentally caught the win sequence too and caused a violent camera snap. Fixed it by explicitly checking each state.
+
+---
+
+## Build Setup
+
+CMake handles everything. On Windows with Visual Studio:
+
+```bash
+mkdir build && cd build
+cmake .. -G "Visual Studio 17 2022"
+cmake --build . --config Release
 ```
 
-**Platform Support:**
-- Windows (Visual Studio 2019/2022)
-- Linux (GCC/Clang)
-- macOS (requires framework linking for OpenGL)
+Dependencies: OpenGL, GLEW, GLFW3. stb_image is bundled as a single header.
 
 ---
 
-## Performance Characteristics
+## Bugs I Fixed
 
-| Metric | Value |
-|--------|-------|
-| **Target Framerate** | 60 FPS |
-| **Draw Calls** | ~200-500 per frame |
-| **Vertex Count** | ~2,000-5,000 per frame |
-| **Memory Usage** | ~20-50 MB |
-| **CPU Usage** | Single-threaded, minimal |
+**Camera snap during win** — The intro zoom logic used `if (state != Playing)` which also caught the win sequence. Split it into explicit state checks.
 
-**Optimizations:**
-- Immediate mode is acceptable due to low vertex count
-- No texture streaming (procedural brick generation)
-- Simple collision broad-phase (AABB rejection before narrow-phase)
+**White explosion misaligned** — I was calculating the explosion position using world coordinates, but during Win_Sequence the projection matrix is different. Switched to screen-center coordinates.
+
+**Black platform spawning at win** — Collecting the 20th white dot would trigger both the win state AND the black platform spawn logic. Added a `dotsCollectedTotal < 20` guard.
+
+**Text upside down** — Initially flipped Y because OpenGL puts (0,0) at bottom-left but I was thinking in top-left screen coordinates.
 
 ---
 
-## Known Issues & Solutions
+## Performance
 
-### Issue: Camera Snap During Win_Sequence
-**Cause:** `if (currentState != GameState::Playing)` caught Win_Sequence in intro zoom logic
-**Solution:** Explicit state checking for Intro vs Win_Sequence vs Playing
+This thing is lightweight. Runs at 60 FPS on basically anything.
 
-### Issue: White Explosion Misaligned
-**Cause:** Projection matrix changes during sequence
-**Solution:** Use screen-center coordinates (fbW*0.5, fbH*0.5) instead of ghost world position
+- Draw calls: a few hundred per frame
+- Vertices: 2,000–5,000 per frame
+- Memory: ~30 MB
+- Entirely single-threaded
 
-### Issue: Black Platform Spawn at Win
-**Cause:** Dot collection triggered spawn logic before win check
-**Solution:** Add `dotsCollectedTotal < 20` guard to spawn condition
+Immediate mode is "bad" for modern GPUs, but when your vertex count is this low it genuinely does not matter. The bottleneck is never the GPU.
 
 ---
 
-## Future Enhancements
+## What I'd Do Differently
 
-1. **Shader-Based Rendering**: Migrate from immediate mode to VBOs/VAOs with shaders
-2. **Audio System**: Add music and SFX (currently silent)
-3. **Save System**: Persist high scores and unlockables
-4. **Mobile Port**: Touch controls, aspect ratio handling
-5. **Modding Support**: Lua scripting for custom levels
+- **Audio:** There's no sound. At all. I didn't want to deal with audio libraries for this project but it definitely needs some.
+- **Modern OpenGL:** VBOs and a simple shader would be cleaner than immediate mode, even if performance isn't an issue.
+- **Save data:** No persistence. High scores, best times, nothing is saved.
+- **More juice:** Screen shake on wall crush, better particle effects, more visual feedback on dot collection.
 
 ---
 
-## Credits & Dependencies
+## Dependencies
 
-| Dependency | Purpose | License |
-|------------|---------|---------|
-| GLFW3 | Window/Input management | zlib/png |
+| Library | What it does | License |
+|---------|-------------|---------|
+| GLFW3 | Window creation, input handling | zlib/png |
 | GLEW | OpenGL extension loading | BSD/MIT |
-| stb_image | Image loading (optional) | Public Domain |
-| CMake | Build system | BSD |
+| stb_image | Load PNGs (optional blood texture) | Public Domain |
 
 ---
-
-## Conclusion
-
-**Ghost Ascent** demonstrates that compelling gameplay emerges from simple systems with meaningful choices. The technical implementation prioritizes clarity and immediate feedback over complex architecture. The game's true depth lies not in its rendering pipeline, but in the philosophical tension encoded in its mechanics: the player must choose between short-term relief (greed/black dots) and long-term victory (discipline/white dots).
-
-The codebase serves as a reference for:
-- OpenGL 2.1 immediate mode techniques
-- State machine implementation in games
-- Procedural content generation
-- Dynamic difficulty adjustment
-- Cinematic sequence programming
 
 *"Discipline is Savior. Greed is Death."*
