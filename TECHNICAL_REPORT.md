@@ -143,7 +143,7 @@ Dependencies: OpenGL, GLEW, GLFW3. stb_image is bundled as a single header.
 
 ---
 
-## Bugs I Fixed
+## Bugs were Fixed
 
 **Camera snap during win** — The intro zoom logic used `if (state != Playing)` which also caught the win sequence. Split it into explicit state checks.
 
@@ -168,7 +168,7 @@ Immediate mode is "bad" for modern GPUs, but when your vertex count is this low 
 
 ---
 
-## What I'd Do Differently
+## What might be done differently
 
 - **Audio:** There's no sound. At all. I didn't want to deal with audio libraries for this project but it definitely needs some.
 - **Modern OpenGL:** VBOs and a simple shader would be cleaner than immediate mode, even if performance isn't an issue.
